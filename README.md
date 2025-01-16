@@ -36,3 +36,30 @@ Activate the environment using `source .venv/bin/activate`
 To run Image Embedding Inference, you can use the following command: `IMAGE_EMBEDDING_MODEL=google/vit-base-patch16-224 gunicorn server:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --preload --bind 0.0.0.0:8000`
 
 You can run an example request using `python examples/request_example.py`
+
+## Example
+
+**Request:**
+
+The endpoint accepts a list of URLs to images.
+
+```bash
+curl -X POST 'http://localhost:8000/embed' \
+--header 'Content-Type: application/json' \
+-d '{
+    "inputs": ["iVBORw0KGgoAAAANSUhEUgAAAogAAAQwCAYAAABmAK+YAAAMSWlDQ1BJQ0MgUHJvZm..."
+    ...
+    ]
+}'
+```
+
+**Response:**
+
+A list of embeddings for each image.
+
+```json
+[
+    [0.8418501019477844, 0.09062539786100388, 0.21319620311260223, 0.04376870021224022, 0.5739715695381165, -0.7696743607521057, ...],
+    ...
+]
+```
