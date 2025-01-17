@@ -113,7 +113,7 @@ async def embed(
 
 def create_app():
     app = FastAPI(
-        title="Image Embedding API",
+        title="Image Embedding Inference API",
         description="API for generating image embeddings.",
         version="0.0.1",
     )
