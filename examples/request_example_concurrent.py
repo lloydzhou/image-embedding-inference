@@ -20,9 +20,6 @@ async def get_image_embedding(base64_image: str, api_url: str="http://0.0.0.0:80
     async with aiohttp.ClientSession() as session:
         response = await session.post(api_url, json=payload)
     
-    # Check if request was successful
-    response.raise_for_status()
-    
     # Return the embeddings
     return await response.json()
 
