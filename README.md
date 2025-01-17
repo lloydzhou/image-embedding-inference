@@ -25,6 +25,10 @@ Build the Docker image using the following command: `docker build -t image-embed
 
 To run Image Embedding Inference in a Docker container, you can use the following command: `docker run -p 8000:8000 -e IMAGE_EMBEDDING_MODEL=google/vit-base-patch16-224 image-embedding-inference`
 
+Extra options:
+- `-e IEI_WORKERS=4`: Number of workers to use. Defaults to 4.
+- `-e IEI_BIND=0.0.0.0:8000`: Bind address and port. Defaults to 0.0.0.0:8000. In addition, `-p` must expose the same port.
+
 ### Python
 
 Install the dependencies using `uv` with the following command: `uv sync`.
