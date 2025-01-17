@@ -1,3 +1,4 @@
+import asyncio
 import os
 import torch
 from pydantic import BaseModel
@@ -44,7 +45,7 @@ class ModelManager:
 class EmbeddingRequest(BaseModel):
     inputs: list[str]  # base64 encoded images
 
-def decode_base64_image(base64_string: str) -> Image.Image:
+async def decode_base64_image(base64_string: str) -> Image.Image:
     if not base64_string:
         raise ValueError("Empty image data")
         
@@ -52,7 +53,9 @@ def decode_base64_image(base64_string: str) -> Image.Image:
         if "base64," in base64_string:
             base64_string = base64_string.split("base64,")[1]
         image_data = base64.b64decode(base64_string)
-        return Image.open(io.BytesIO(image_data))
+        loop = asyncio.get_event_loop()
+        image = await loop.run_in_executor(None, lambda: Image.open(io.BytesIO(image_data)))
+        return image
     except Exception as e:
         raise ValueError(f"Invalid image data: {str(e)}")
 
@@ -71,11 +74,11 @@ async def embed(
     model_manager: ModelManager = Depends(get_model_manager)
 ):
     try:
-        print(f"Embedding images {len(request.inputs)}...")
+        print(f"Embedding {len(request.inputs)} images...")
         now = datetime.now()
         all_embeddings = []
         for image_input in request.inputs:
-            image = decode_base64_image(image_input)
+            image = await decode_base64_image(image_input)
             image_array = np.array(image)
             
             if image_array.ndim != 3:
@@ -88,11 +91,12 @@ async def embed(
             input_size = model_manager.processor.size
             image = Image.fromarray(image_array).resize((input_size["width"], input_size["height"]))
             
-            inputs = model_manager.processor(images=image, return_tensors="pt")
+            loop = asyncio.get_event_loop()
+            inputs = await loop.run_in_executor(None, lambda: model_manager.processor(images=image, return_tensors="pt"))
             inputs = {k: v.to(model_manager.device) for k, v in inputs.items()}
             
             with torch.no_grad():
-                outputs = model_manager.model(**inputs)
+                outputs = await loop.run_in_executor(None, lambda: model_manager.model(**inputs))
                 embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy().tolist()[0]
             
             all_embeddings.append(embeddings)
