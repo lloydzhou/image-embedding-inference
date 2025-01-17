@@ -13,3 +13,8 @@ dependencies = [
     "transformers>=4.47.1",
     "uvicorn>=0.34.0",
 ]
+
+[dependency-groups]
+dev = [
+    "aiohttp>=3.11.11",
+]
