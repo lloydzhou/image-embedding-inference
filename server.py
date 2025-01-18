@@ -21,11 +21,13 @@ logging.basicConfig(
 
 router = APIRouter()
 
+
 @lru_cache()
 def get_concurrency_level() -> int:
     level = os.getenv("IEI_CONCURRENCY", 1000)
     LOGGER.info(f"Concurrency level set to: {level}")
     return int(level)
+
 
 class ModelManager:
     MODELS = [
@@ -87,12 +89,14 @@ async def decode_base64_image(base64_string: str) -> Image.Image:
 def get_model_manager() -> ModelManager:
     model_name = os.getenv("IMAGE_EMBEDDING_MODEL", "google/vit-base-patch16-224")
     LOGGER.info(f"Loading model: {model_name}")
-    LOGGER.info(f"Using device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
-    
+    LOGGER.info(
+        f"Using device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}"
+    )
+
     mm = ModelManager.from_model_name(model_name)
-    
+
     LOGGER.info(f"Embeddings with size: {mm.model.config.hidden_size}")
-    
+
     return mm
 
 
@@ -136,9 +140,13 @@ async def embed_image(image_base64: str, model_manager: ModelManager) -> list[fl
     LOGGER.info("Embeddings generated.")
     return embeddings
 
-async def bounded_embed_image(semaphore: asyncio.Semaphore, image_base64: str, model_manager: ModelManager) -> list[float]:
+
+async def bounded_embed_image(
+    semaphore: asyncio.Semaphore, image_base64: str, model_manager: ModelManager
+) -> list[float]:
     async with semaphore:
         return await embed_image(image_base64, model_manager)
+
 
 @router.post("/embed", response_model=list[list[float]])
 async def embed(
@@ -151,7 +159,11 @@ async def embed(
         tasks = []
         semaphore = asyncio.Semaphore(get_concurrency_level())
         for image_input in request.inputs:
-            tasks.append(asyncio.ensure_future(bounded_embed_image(semaphore, image_input, model_manager)))
+            tasks.append(
+                asyncio.ensure_future(
+                    bounded_embed_image(semaphore, image_input, model_manager)
+                )
+            )
         embeddings = await asyncio.gather(*tasks)
 
         LOGGER.info(f"Tasks completed ({len(tasks)})")
