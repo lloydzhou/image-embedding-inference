@@ -28,6 +28,7 @@ To run Image Embedding Inference in a Docker container, you can use the followin
 Extra options:
 - `-e IEI_WORKERS=4`: Number of workers to use. Defaults to 4.
 - `-e IEI_BIND=0.0.0.0:8000`: Bind address and port. Defaults to 0.0.0.0:8000. In addition, `-p` must expose the same port.
+- `-e IEI_CONCURRENCY_LEVEL=100`: Max number of concurrent images to process in a single request. Defaults to 1000.
 
 ### Python
 
