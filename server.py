@@ -10,6 +10,10 @@ from transformers import AutoImageProcessor, AutoModel
 import numpy as np
 from functools import lru_cache
 from datetime import datetime
+import logging
+
+LOGGER = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", filename="server.log")
 
 router = APIRouter()
 
@@ -90,7 +94,7 @@ async def embed_image(image_base64: str, model_manager: ModelManager) -> list[fl
         outputs = await loop.run_in_executor(None, lambda: model_manager.model(**inputs))
         embeddings = outputs.last_hidden_state.mean(dim=1).cpu().detach().numpy().tolist()[0]
 
-    print(f"Embeddings generated with dimension: {len(embeddings)}")
+    LOGGER.info(f"Embeddings generated with dimension: {len(embeddings)}")
     return embeddings
 
 @router.post("/embed", response_model=list[list[float]])
@@ -99,19 +103,19 @@ async def embed(
     model_manager: ModelManager = Depends(get_model_manager)
 ):
     try:
-        print(f"Embedding {len(request.inputs)} images...")
+        LOGGER.info(f"Embedding {len(request.inputs)} images...")
         now = datetime.now()
 
         tasks = []
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(embed_image(image_input, model_manager), name=i) for i, image_input in enumerate(request.inputs)]
 
-        print(f"Tasks completed ({len(tasks)})")
+        LOGGER.info(f"Tasks completed ({len(tasks)})")
 
         embeddings = [task.result() for task in tasks]
         
         total_time = (datetime.now() - now).total_seconds()
-        print(f"Embeddings generated in {total_time} seconds. | Avg time per image: {total_time / len(request.inputs)} seconds.")
+        LOGGER.info(f"Embeddings generated in {total_time} seconds. | Avg time per image: {total_time / len(request.inputs)} seconds.")
         return embeddings
         
     except ValueError as e:
