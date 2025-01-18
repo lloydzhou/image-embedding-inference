@@ -172,6 +172,7 @@ async def embed(
 
 def create_app():
     get_concurrency_level()
+    # Current setup doesn't support shared model manager.
 
     app = FastAPI(
         title="Image Embedding Inference API",
