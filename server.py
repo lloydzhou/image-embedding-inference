@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, APIRouter, Depends
 import base64
 from PIL import Image
 import io
-from transformers import AutoImageProcessor, AutoModel
+from transformers import AutoImageProcessor, AutoModel  # type: ignore
 import numpy as np
 from functools import lru_cache
 from datetime import datetime
