@@ -134,8 +134,8 @@ async def embed(
         tasks = []
         async with asyncio.TaskGroup() as tg:
             tasks = [
-                tg.create_task(embed_image(image_input, model_manager), name=i)
-                for i, image_input in enumerate(request.inputs)
+                tg.create_task(embed_image(image_input, model_manager))
+                for image_input in request.inputs
             ]
 
         LOGGER.info(f"Tasks completed ({len(tasks)})")
