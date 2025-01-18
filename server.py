@@ -21,6 +21,11 @@ logging.basicConfig(
 
 router = APIRouter()
 
+@lru_cache()
+def get_concurrency_level() -> int:
+    level = os.getenv("IEI_CONCURRENCY", 1000)
+    LOGGER.info(f"Concurrency level set to: {level}")
+    return int(level)
 
 class ModelManager:
     MODELS = [
@@ -79,9 +84,16 @@ async def decode_base64_image(base64_string: str) -> Image.Image:
 
 
 @lru_cache()
-def get_model_manager():
+def get_model_manager() -> ModelManager:
     model_name = os.getenv("IMAGE_EMBEDDING_MODEL", "google/vit-base-patch16-224")
-    return ModelManager.from_model_name(model_name)
+    LOGGER.info(f"Loading model: {model_name}")
+    LOGGER.info(f"Using device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")
+    
+    mm = ModelManager.from_model_name(model_name)
+    
+    LOGGER.info(f"Embeddings with size: {mm.model.config.hidden_size}")
+    
+    return mm
 
 
 @router.get("/health")
@@ -90,6 +102,8 @@ async def health():
 
 
 async def embed_image(image_base64: str, model_manager: ModelManager) -> list[float]:
+    LOGGER.info(f"Embedding image")
+
     image = await decode_base64_image(image_base64)
     image_array = np.array(image)
     loop = asyncio.get_event_loop()
@@ -119,9 +133,12 @@ async def embed_image(image_base64: str, model_manager: ModelManager) -> list[fl
             outputs.last_hidden_state.mean(dim=1).cpu().detach().numpy().tolist()[0]
         )
 
-    LOGGER.info(f"Embeddings generated with dimension: {len(embeddings)}")
+    LOGGER.info("Embeddings generated.")
     return embeddings
 
+async def bounded_embed_image(semaphore: asyncio.Semaphore, image_base64: str, model_manager: ModelManager) -> list[float]:
+    async with semaphore:
+        return await embed_image(image_base64, model_manager)
 
 @router.post("/embed", response_model=list[list[float]])
 async def embed(
@@ -132,15 +149,12 @@ async def embed(
         now = datetime.now()
 
         tasks = []
-        async with asyncio.TaskGroup() as tg:
-            tasks = [
-                tg.create_task(embed_image(image_input, model_manager))
-                for image_input in request.inputs
-            ]
+        semaphore = asyncio.Semaphore(get_concurrency_level())
+        for image_input in request.inputs:
+            tasks.append(asyncio.ensure_future(bounded_embed_image(semaphore, image_input, model_manager)))
+        embeddings = await asyncio.gather(*tasks)
 
         LOGGER.info(f"Tasks completed ({len(tasks)})")
-
-        embeddings = [task.result() for task in tasks]
 
         total_time = (datetime.now() - now).total_seconds()
         LOGGER.info(
@@ -157,6 +171,8 @@ async def embed(
 
 
 def create_app():
+    get_concurrency_level()
+
     app = FastAPI(
         title="Image Embedding Inference API",
         description="API for generating image embeddings.",
