@@ -68,6 +68,31 @@ def get_model_manager():
 async def health():
     return {"message": "OK"}
 
+async def embed_image(image_base64: str, model_manager: ModelManager) -> list[float]:
+    image = await decode_base64_image(image_base64)
+    image_array = np.array(image)
+    loop = asyncio.get_event_loop()
+
+    if image_array.ndim != 3:
+        raise ValueError("Image must be RGB or RGBA")
+    
+    if image_array.shape[2] == 4:
+        image_array = image_array[:, :, :3]
+    
+    # Get required input size from processor
+    input_size = model_manager.processor.size
+    image = Image.fromarray(image_array).resize((input_size["width"], input_size["height"]))
+    
+    inputs = await loop.run_in_executor(None, lambda: model_manager.processor(images=image, return_tensors="pt"))
+    inputs = {k: v.to(model_manager.device) for k, v in inputs.items()}
+    
+    with torch.no_grad():
+        outputs = await loop.run_in_executor(None, lambda: model_manager.model(**inputs))
+        embeddings = outputs.last_hidden_state.mean(dim=1).cpu().detach().numpy().tolist()[0]
+
+    print(f"Embeddings generated with dimension: {len(embeddings)}")
+    return embeddings
+
 @router.post("/embed", response_model=list[list[float]])
 async def embed(
     request: EmbeddingRequest,
@@ -76,34 +101,18 @@ async def embed(
     try:
         print(f"Embedding {len(request.inputs)} images...")
         now = datetime.now()
-        all_embeddings = []
-        for image_input in request.inputs:
-            image = await decode_base64_image(image_input)
-            image_array = np.array(image)
-            
-            if image_array.ndim != 3:
-                raise ValueError("Image must be RGB or RGBA")
-            
-            if image_array.shape[2] == 4:
-                image_array = image_array[:, :, :3]
-            
-            # Get required input size from processor
-            input_size = model_manager.processor.size
-            image = Image.fromarray(image_array).resize((input_size["width"], input_size["height"]))
-            
-            loop = asyncio.get_event_loop()
-            inputs = await loop.run_in_executor(None, lambda: model_manager.processor(images=image, return_tensors="pt"))
-            inputs = {k: v.to(model_manager.device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                outputs = await loop.run_in_executor(None, lambda: model_manager.model(**inputs))
-                embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy().tolist()[0]
-            
-            all_embeddings.append(embeddings)
 
+        tasks = []
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(embed_image(image_input, model_manager), name=i) for i, image_input in enumerate(request.inputs)]
+
+        print(f"Tasks completed ({len(tasks)})")
+
+        embeddings = [task.result() for task in tasks]
+        
         total_time = (datetime.now() - now).total_seconds()
         print(f"Embeddings generated in {total_time} seconds. | Avg time per image: {total_time / len(request.inputs)} seconds.")
-        return all_embeddings
+        return embeddings
         
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
