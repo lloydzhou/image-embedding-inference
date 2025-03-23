@@ -1,16 +1,16 @@
 import asyncio
 import os
-import torch
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, APIRouter, Depends
 import base64
 from PIL import Image
 import io
-from transformers import AutoImageProcessor, AutoModel  # type: ignore
 import numpy as np
 from functools import lru_cache
 from datetime import datetime
 import logging
+import onnxruntime as ort
+import json
 
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(
@@ -41,27 +41,59 @@ class ModelManager:
         "nateraw/vit-base-beans",
     ]
 
-    def __init__(self, model_name: str):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, model_path: str, config_path: str = None):
+        # 设置ONNX运行时选项
+        options = ort.SessionOptions()
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        # 检查CUDA可用性并设置提供者
+        providers = ['CPUExecutionProvider']
+        if 'CUDAExecutionProvider' in ort.get_available_providers():
+            providers.insert(0, 'CUDAExecutionProvider')
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
+        
         try:
-            self.model = AutoModel.from_pretrained(
-                model_name, add_pooling_layer=False
-            ).to(self.device)
-            self.processor = AutoImageProcessor.from_pretrained(
-                model_name, use_fast=True
-            )
+            # 加载ONNX模型
+            self.model = ort.InferenceSession(model_path, options, providers=providers)
+            
+            # 加载模型配置（图像尺寸和隐藏层大小）
+            if config_path and os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    self.config = json.load(f)
+            else:
+                # 默认配置
+                self.config = {
+                    "image_size": {"height": 224, "width": 224},
+                    "hidden_size": 768  # ViT-base的典型隐藏层大小
+                }
+                
+            # 获取模型输入名称
+            self.input_name = self.model.get_inputs()[0].name
+            self.output_name = self.model.get_outputs()[0].name
         except Exception as e:
-            raise RuntimeError(f"Failed to load model {model_name}: {str(e)}")
+            raise RuntimeError(f"Failed to load model {model_path}: {str(e)}")
 
     @classmethod
     def is_valid_model_name(cls, model_name: str) -> bool:
-        return model_name in cls.MODELS
+        return model_name in cls.MODELS or os.path.exists(model_name)
 
     @classmethod
     def from_model_name(cls, model_name: str) -> "ModelManager":
         if not cls.is_valid_model_name(model_name):
             raise ValueError(f"Invalid model name: {model_name}")
-        return cls(model_name)
+        
+        # 如果指定的是模型ID而不是路径，使用默认ONNX路径
+        if model_name in cls.MODELS:
+            model_path = os.getenv("ONNX_MODEL_PATH", "onnx/model.onnx")
+            config_path = os.getenv("MODEL_CONFIG_PATH", "onnx/config.json")
+        else:
+            model_path = model_name
+            config_dir = os.path.dirname(model_name)
+            config_path = os.path.join(config_dir, "model_config.json")
+            
+        return cls(model_path, config_path)
 
 
 class EmbeddingRequest(BaseModel):
@@ -85,17 +117,48 @@ async def decode_base64_image(base64_string: str) -> Image.Image:
         raise ValueError(f"Invalid image data: {str(e)}")
 
 
+def preprocess_image(image: Image.Image, target_size: tuple) -> np.ndarray:
+    """处理图像适应ONNX模型输入"""
+    # 调整图像大小
+    image = image.resize(target_size)
+    
+    # 转换为RGB（如果有Alpha通道）
+    if image.mode == 'RGBA':
+        image = image.convert('RGB')
+    
+    # 转换为NumPy数组并归一化
+    image_array = np.array(image).astype(np.float32) / 255.0
+    
+    # 标准化 (使用ImageNet标准均值和方差) - 确保使用float32类型
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+    image_array = (image_array - mean) / std
+    
+    # 转换为NCHW格式 (batch, channels, height, width)
+    image_array = np.transpose(image_array, (2, 0, 1))
+    image_array = np.expand_dims(image_array, axis=0)
+    
+    # 确保输出是float32类型
+    image_array = image_array.astype(np.float32)
+    
+    return image_array
+
+
 @lru_cache()
 def get_model_manager() -> ModelManager:
     model_name = os.getenv("IMAGE_EMBEDDING_MODEL", "google/vit-base-patch16-224")
+    model_path = os.getenv("ONNX_MODEL_PATH", "model.onnx")
+    
+    # 如果提供的是模型ID而不是实际路径，使用默认ONNX路径
+    if not os.path.exists(model_name):
+        model_name = model_path
+        
     LOGGER.info(f"Loading model: {model_name}")
-    LOGGER.info(
-        f"Using device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}"
-    )
+    LOGGER.info(f"ONNX providers: {ort.get_available_providers()}")
 
     mm = ModelManager.from_model_name(model_name)
-
-    LOGGER.info(f"Embeddings with size: {mm.model.config.hidden_size}")
+    
+    LOGGER.info(f"Embeddings with size: {mm.config['hidden_size'] if 'hidden_size' in mm.config else 'Unknown'}")
 
     return mm
 
@@ -109,33 +172,29 @@ async def embed_image(image_base64: str, model_manager: ModelManager) -> list[fl
     LOGGER.info(f"Embedding image")
 
     image = await decode_base64_image(image_base64)
-    image_array = np.array(image)
     loop = asyncio.get_event_loop()
 
-    if image_array.ndim != 3:
-        raise ValueError("Image must be RGB or RGBA")
-
-    if image_array.shape[2] == 4:
-        image_array = image_array[:, :, :3]
-
-    # Get required input size from processor
-    input_size = model_manager.processor.size
-    image = Image.fromarray(image_array).resize(
-        (input_size["width"], input_size["height"])
+    # 获取目标图像尺寸
+    target_size = (
+        model_manager.config["image_size"]["width"],
+        model_manager.config["image_size"]["height"]
     )
-
-    inputs = await loop.run_in_executor(
-        None, lambda: model_manager.processor(images=image, return_tensors="pt")
+    
+    # 预处理图像
+    image_tensor = await loop.run_in_executor(
+        None, lambda: preprocess_image(image, target_size)
     )
-    inputs = {k: v.to(model_manager.device) for k, v in inputs.items()}
-
-    with torch.no_grad():
-        outputs = await loop.run_in_executor(
-            None, lambda: model_manager.model(**inputs)
-        )
-        embeddings = (
-            outputs.last_hidden_state.mean(dim=1).cpu().detach().numpy().tolist()[0]
-        )
+    
+    # 执行ONNX模型推理
+    ort_inputs = {model_manager.input_name: image_tensor}
+    
+    outputs = await loop.run_in_executor(
+        None, lambda: model_manager.model.run([model_manager.output_name], ort_inputs)
+    )
+    
+    # 处理输出以获取嵌入向量（假设输出是最后隐藏状态的平均值）
+    # 注意：这里的处理可能需要根据具体ONNX模型的输出格式进行调整
+    embeddings = outputs[0].mean(axis=1).flatten().tolist()
 
     LOGGER.info("Embeddings generated.")
     return embeddings
