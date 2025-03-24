@@ -15,7 +15,7 @@ RUN uv pip install --system --no-cache-dir .
 
 ENV IMAGE_EMBEDDING_MODEL=nateraw/vit-base-beans
 ENV PYTHONUNBUFFERED=1
-ENV IEI_WORKERS=4
+ENV IEI_WORKERS=1
 ENV IEI_BIND=0.0.0.0:8000
 
 EXPOSE 8000
