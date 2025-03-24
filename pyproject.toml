@@ -9,4 +9,5 @@ dependencies = [
     "gunicorn>=23.0.0",
     "pillow",
     "onnxruntime",
+    "uvicorn>=0.34.0",
 ]

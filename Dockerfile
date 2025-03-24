@@ -20,7 +20,7 @@ ENV IEI_BIND=0.0.0.0:8000
 
 EXPOSE 8000
 
-RUN curl -L https://huggingface.co/prasankumar93/nateraw-vit-base-beans-onnx/resolve/main/onnx/model.onnx -o /app/model.onnx
+RUN curl -L https://huggingface.co/spaces/lloydzhou/nateraw-vit-base-beans-onnx/resolve/main/model.onnx -o /app/model.onnx
 COPY ./server.py ./
 
 CMD gunicorn server:app --workers $IEI_WORKERS --worker-class uvicorn.workers.UvicornWorker --preload --bind $IEI_BIND
