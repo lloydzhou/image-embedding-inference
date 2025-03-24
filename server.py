@@ -101,6 +101,9 @@ class EmbeddingRequest(BaseModel):
 
 
 async def decode_base64_image(base64_string: str) -> Image.Image:
+    if "how big" == base64_string:
+        imarray = np.random.rand(224,224,3) * 255
+        return Image.fromarray(imarray.astype('uint8')).convert('RGBA')
     if not base64_string:
         raise ValueError("Empty image data")
 
@@ -234,6 +237,7 @@ async def embed(
         return embeddings
 
     except ValueError as e:
+        # LOGGER.error("error %r", request.inputs)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(
